@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Time Clock">
+<meta name="robots" content="noindex">
+<title>HCT Time Clock</title>
+<!--
+  HCT Time Clock — photo kiosk for the base iPad.
+  Lives outside Google (GitHub Pages) because Google's web-app frame blocks the camera; it talks to the
+  "HCT Timeclock" Apps Script (doPost in Code.gs). The access key comes from the link (?k=...) and is
+  remembered on the iPad — it is never stored in this file. Source of truth: hct-crew-app/timeclock/kiosk-page.
+-->
+<style>
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { margin: 0; height: 100%; background: #eef1ec; color: #1b1f1a; font-family: -apple-system, system-ui, sans-serif; user-select: none; -webkit-user-select: none; }
+  .wrap { height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 18px; padding: 16px; }
+  header { position: fixed; top: 0; left: 0; right: 0; background: #263a22; color: #fff; padding: 14px 20px; display: flex; justify-content: space-between; align-items: center; z-index: 2; }
+  header b { font-size: 20px; } #net { font-size: 14px; opacity: .85; }
+  #clock { font-size: 64px; font-weight: 700; letter-spacing: -1px; } #date { font-size: 20px; color: #4b5548; margin-top: -10px; }
+  .dots { display: flex; gap: 14px; height: 26px; } .dots i { width: 22px; height: 22px; border-radius: 50%; border: 2px solid #263a22; }
+  .dots i.on { background: #263a22; }
+  .pad { display: grid; grid-template-columns: repeat(3, 96px); gap: 14px; }
+  .pad button { height: 82px; border: 0; border-radius: 18px; background: #fff; font-size: 34px; font-weight: 600; color: #1b1f1a; box-shadow: 0 2px 6px rgba(0,0,0,.1); }
+  .pad button:active { background: #dfe6da; } .pad .ghost { background: transparent; box-shadow: none; font-size: 18px; color: #555; }
+  .msg { min-height: 28px; font-size: 20px; text-align: center; } .err { color: #b00020; }
+  .card { background: #fff; border-radius: 22px; padding: 28px 34px; text-align: center; box-shadow: 0 4px 18px rgba(0,0,0,.12); min-width: 380px; max-width: 92vw; }
+  .card h1 { margin: 0 0 6px; font-size: 34px; } .card p { margin: 0 0 18px; font-size: 18px; color: #4b5548; }
+  .big { display: block; width: 100%; border: 0; border-radius: 16px; padding: 24px; font-size: 30px; font-weight: 700; color: #fff; }
+  .in { background: #2e7d32; } .out { background: #c62828; } .cancel { margin-top: 14px; background: #e6e9e2; color: #333; font-size: 20px; padding: 16px; }
+  .done h1 { font-size: 40px; } .done .tick { font-size: 70px; }
+  #camBox { width: 240px; height: 180px; margin: 0 auto 18px; border-radius: 14px; overflow: hidden; background: #000; }
+  #camBox video { width: 100%; height: 100%; object-fit: cover; transform: scaleX(-1); }
+  .hide { display: none !important; }
+  .setup { max-width: 520px; text-align: center; font-size: 18px; line-height: 1.5; }
+</style>
+</head>
+<body>
+<header><b>HCT Time Clock</b><span id="net"></span></header>
+<div class="wrap hide" id="nokey"><div class="setup"><h2>This clock isn't set up</h2>Open the full kiosk link (it ends with <code>?k=…</code>) on this iPad once. Ask the office for it.</div></div>
+<div class="wrap" id="home">
+  <div id="clock"></div><div id="date"></div>
+  <div class="msg" id="msg">Enter your PIN</div>
+  <div class="dots" id="dots"></div>
+  <div class="pad" id="pad"></div>
+</div>
+<div class="wrap hide" id="confirm"><div class="card">
+  <h1 id="cName"></h1><p id="cInfo"></p>
+  <div id="camBox"></div>
+  <button class="big" id="cGo"></button><button class="big cancel" id="cNo">Cancel</button>
+</div></div>
+<div class="wrap hide" id="done"><div class="card done"><div class="tick">✓</div><h1 id="dTitle"></h1><p id="dInfo"></p></div></div>
+<video id="cam" autoplay playsinline muted></video>
+<canvas id="snap" width="320" height="240" class="hide"></canvas>
+<script>
+// The "Kiosk (base iPad)" web-app deployment of the HCT Timeclock script. Not secret: every call also needs the key.
+var API = 'https://script.google.com/macros/s/AKfycbyJj01ZmNGFfockPUTZylujRcD8dXKgxYinUtarqbOJ6SIM1h8NHTR63ijHg07jilge/exec';
+var KKEY = 'hctClockKey', QKEY = 'hctClockQueue', MAXLEN = 6;
+var pin = '', who = null, busy = false, resetT = null;
+function $(id) { return document.getElementById(id); }
+function store(k, v) { try { if (v === undefined) return localStorage.getItem(k); localStorage.setItem(k, v); } catch (e) { return null; } }
+
+// ---- access key: from the link the first time, then remembered on this iPad ----
+var K = new URLSearchParams(location.search).get('k') || store(KKEY) || '';
+if (K) store(KKEY, K);
+if (!K) { $('home').classList.add('hide'); $('nokey').classList.remove('hide'); }
+
+function show(id) { ['home', 'confirm', 'done'].forEach(function (x) { $(x).classList.toggle('hide', x !== id); }); }
+
+// ---- talking to the timeclock script ----
+function api(action, body) {
+  body.k = K; body.action = action;
+  var ctl = new AbortController(), t = setTimeout(function () { ctl.abort(); }, 30000);
+  return fetch(API, { method: 'POST', body: JSON.stringify(body), signal: ctl.signal })   // text/plain: no preflight
+    .then(function (r) { return r.json(); }, function (e) { var x = new Error(e.name === 'AbortError' ? 'timeout' : 'network'); x.offline = e.name !== 'AbortError'; throw x; })
+    .then(function (r) { clearTimeout(t); if (!r.ok) throw new Error(r.error); return r.data; },
+          function (e) { clearTimeout(t); throw e; });
+}
+
+// ---- clock + keypad ----
+function tick() {
+  var d = new Date();
+  $('clock').textContent = d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+  $('date').textContent = d.toLocaleDateString([], { weekday: 'long', month: 'long', day: 'numeric' });
+}
+setInterval(tick, 1000); tick();
+var keys = ['1','2','3','4','5','6','7','8','9','Clear','0','Enter'];
+$('pad').innerHTML = keys.map(function (k) { return '<button type="button" class="' + (k.length > 1 ? 'ghost' : '') + '" data-k="' + k + '">' + (k === 'Enter' ? 'OK' : k) + '</button>'; }).join('');
+$('pad').addEventListener('click', function (ev) {
+  var b = ev.target.closest('[data-k]'); if (!b || busy) return;
+  var k = b.getAttribute('data-k');
+  if (k === 'Clear') pin = ''; else if (k === 'Enter') return lookup(); else if (pin.length < MAXLEN) pin += k;
+  drawDots(); setMsg('Enter your PIN');
+});
+function drawDots() { var h = ''; for (var i = 0; i < Math.max(4, pin.length); i++) h += '<i class="' + (i < pin.length ? 'on' : '') + '"></i>'; $('dots').innerHTML = h; }
+function clean(err) { return String(err && err.message || err || '').replace(/^(Exception|Error):\s*/, ''); }
+function setMsg(t, err) { $('msg').textContent = t; $('msg').className = 'msg' + (err ? ' err' : ''); }
+drawDots();
+
+// ---- camera: kept running so the picture is instant; punches still work if it's off ----
+var cam = $('cam'), stream = null;
+function startCam() {
+  if (stream && stream.active) return;
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) { drawNet(); return; }
+  navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user', width: { ideal: 640 }, height: { ideal: 480 } }, audio: false })
+    .then(function (s) { stream = s; cam.srcObject = s; s.getTracks().forEach(function (t) { t.onended = function () { stream = null; }; }); drawNet(); })
+    .catch(function () { stream = null; drawNet(); });
+}
+function photo() {
+  if (!stream || cam.readyState < 2 || !cam.videoWidth) return '';
+  try {
+    var c = $('snap'), w = cam.videoWidth, h = cam.videoHeight, s = Math.min(w / 320, h / 240);
+    c.getContext('2d').drawImage(cam, (w - 320 * s) / 2, (h - 240 * s) / 2, 320 * s, 240 * s, 0, 0, 320, 240);
+    return c.toDataURL('image/jpeg', 0.7);
+  } catch (e) { return ''; }
+}
+function camTo(box) { (box || document.body).appendChild(cam); cam.classList.toggle('hide', !box); if (cam.paused) cam.play().catch(function () {}); }
+camTo(null);
+document.addEventListener('visibilitychange', function () { if (!document.hidden) startCam(); });
+if (K) startCam();
+
+// ---- punching ----
+function lookup() {
+  if (pin.length < 4) { setMsg('PIN is at least 4 digits', true); return; }
+  busy = true; setMsg('Checking…'); startCam();
+  api('who', { pin: pin }).then(function (w) {
+    busy = false; who = w;
+    $('cName').textContent = 'Hi ' + w.name.split(' ')[0];
+    $('cInfo').textContent = w.next === 'OUT' ? 'You clocked in ' + w.since + '.' : 'You are clocked out.';
+    $('cGo').textContent = w.next === 'OUT' ? 'Clock Out' : 'Clock In';
+    $('cGo').className = 'big ' + (w.next === 'OUT' ? 'out' : 'in');
+    $('camBox').classList.toggle('hide', !stream);
+    camTo(stream ? $('camBox') : null);
+    show('confirm'); later(20000);
+  }, function (err) {
+    busy = false;
+    if (err.offline || !navigator.onLine) { queue(photo()); return; }
+    pin = ''; drawDots(); setMsg(err.message === 'timeout' ? 'No answer from the server. Try again.' : clean(err) || 'Try again', true);
+  });
+}
+$('cGo').onclick = function () {
+  if (busy || !who) return;
+  busy = true; clearTimeout(resetT); $('cGo').textContent = 'Saving…';
+  var pic = photo(), type = who.next;
+  api('punch', { pin: pin, type: type, photo: pic }).then(function (r) {
+    busy = false; finish((r.type === 'OUT' ? 'Clocked Out' : 'Clocked In') + ' ' + r.time, 'Thanks, ' + r.name.split(' ')[0] + '!');
+  }, function (err) {
+    busy = false;
+    if (err.offline || !navigator.onLine) { queue(pic); return; }
+    finish('Not saved', err.message === 'timeout' ? 'No answer from the server. Check the On the clock list before trying again.' : clean(err) || 'Please try again.', true);
+  });
+};
+$('cNo').onclick = reset;
+function finish(title, info, bad) {
+  camTo(null);
+  $('dTitle').textContent = title; $('dInfo').textContent = info;
+  document.querySelector('.tick').textContent = bad ? '!' : '✓';
+  document.querySelector('.tick').style.color = bad ? '#b00020' : '#2e7d32';
+  show('done'); later(bad ? 6000 : 4000);
+}
+function later(ms) { clearTimeout(resetT); resetT = setTimeout(reset, ms); }
+function reset() { clearTimeout(resetT); camTo(null); pin = ''; who = null; busy = false; drawDots(); setMsg('Enter your PIN'); show('home'); }
+
+// ---- offline: keep the punch on the iPad, send it when the connection is back ----
+function readQ() { try { return JSON.parse(localStorage.getItem(QKEY) || '[]'); } catch (e) { return []; } }
+function writeQ(q) { try { localStorage.setItem(QKEY, JSON.stringify(q)); } catch (e) {} }
+function queue(pic) {
+  var q = readQ(); q.push({ id: 'q' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8), pin: pin, at: Date.now(), photo: pic || '' }); writeQ(q); drawNet();
+  finish('Saved ' + new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }), 'No internet right now, so your PIN can\'t be checked. Your punch is saved on this iPad and will be sent automatically. If you think you mistyped your PIN, tell the office.');
+}
+function drawNet() {
+  var n = readQ().length;
+  $('net').textContent = [n ? n + ' punch' + (n > 1 ? 'es' : '') + ' waiting to send' : '', K && !stream ? 'Camera off' : ''].filter(Boolean).join(' · ');
+}
+var sending = false;
+function flush() {
+  var q = readQ(); if (!q.length || !navigator.onLine || sending) return;
+  sending = true;
+  api('sync', { list: q }).then(function () { writeQ(readQ().slice(q.length)); }, function () {})
+    .then(function () { sending = false; drawNet(); });
+}
+if (K) { setInterval(flush, 60000); window.addEventListener('online', flush); setTimeout(flush, 3000); }
+drawNet();
+</script>
+</body>
+</html>
