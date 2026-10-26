@@ -125,6 +125,16 @@ document.addEventListener('visibilitychange', function () { if (!document.hidden
 $('net').addEventListener('click', function () { if (!stream) startCam(); });   // a tap lets the iPad ask for the camera again
 if (K) startCam();
 
+// In Safari (not the Home Screen icon), go full screen on a tap so the address bar is hidden — where the iPad allows it.
+function fullScreen() {
+  if (navigator.standalone) return;
+  var el = document.documentElement, req = el.requestFullscreen || el.webkitRequestFullscreen || el.webkitRequestFullScreen;
+  if (!req || document.fullscreenElement || document.webkitFullscreenElement || document.webkitCurrentFullScreenElement) return;
+  try { var r = req.call(el); if (r && r.catch) r.catch(function () {}); } catch (e) {}
+}
+document.addEventListener('click', fullScreen, true);
+document.addEventListener('touchend', fullScreen, true);
+
 // ---- punching ----
 function lookup() {
   if (pin.length < 4) { setMsg('PIN is at least 4 digits', true); return; }
