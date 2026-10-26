@@ -18,7 +18,7 @@
   html, body { margin: 0; height: 100%; background: #eef1ec; color: #1b1f1a; font-family: -apple-system, system-ui, sans-serif; user-select: none; -webkit-user-select: none; }
   .wrap { height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 18px; padding: 16px; }
   header { position: fixed; top: 0; left: 0; right: 0; background: #263a22; color: #fff; padding: 14px 20px; display: flex; justify-content: space-between; align-items: center; z-index: 2; }
-  header b { font-size: 20px; } #net { font-size: 14px; opacity: .85; }
+  header b { font-size: 20px; } #net { font-size: 14px; opacity: .85; padding: 6px 0 6px 12px; }
   #clock { font-size: 64px; font-weight: 700; letter-spacing: -1px; } #date { font-size: 20px; color: #4b5548; margin-top: -10px; }
   .dots { display: flex; gap: 14px; height: 26px; } .dots i { width: 22px; height: 22px; border-radius: 50%; border: 2px solid #263a22; }
   .dots i.on { background: #263a22; }
@@ -100,13 +100,13 @@ function setMsg(t, err) { $('msg').textContent = t; $('msg').className = 'msg' +
 drawDots();
 
 // ---- camera: kept running so the picture is instant; punches still work if it's off ----
-var cam = $('cam'), stream = null;
+var cam = $('cam'), stream = null, camWhy = '';
 function startCam() {
   if (stream && stream.active) return;
-  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) { drawNet(); return; }
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) { camWhy = 'not available here'; drawNet(); return; }
   navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user', width: { ideal: 640 }, height: { ideal: 480 } }, audio: false })
-    .then(function (s) { stream = s; cam.srcObject = s; s.getTracks().forEach(function (t) { t.onended = function () { stream = null; }; }); drawNet(); })
-    .catch(function () { stream = null; drawNet(); });
+    .then(function (s) { stream = s; camWhy = ''; cam.srcObject = s; s.getTracks().forEach(function (t) { t.onended = function () { stream = null; }; }); drawNet(); })
+    .catch(function (e) { stream = null; camWhy = { NotAllowedError: 'blocked', NotFoundError: 'no camera', NotReadableError: 'in use by another app' }[e && e.name] || (e && e.name) || 'error'; drawNet(); });
 }
 function photo() {
   if (!stream || cam.readyState < 2 || !cam.videoWidth) return '';
@@ -119,6 +119,7 @@ function photo() {
 function camTo(box) { (box || document.body).appendChild(cam); cam.classList.toggle('hide', !box); if (cam.paused) cam.play().catch(function () {}); }
 camTo(null);
 document.addEventListener('visibilitychange', function () { if (!document.hidden) startCam(); });
+$('net').addEventListener('click', function () { if (!stream) startCam(); });   // a tap lets the iPad ask for the camera again
 if (K) startCam();
 
 // ---- punching ----
@@ -172,7 +173,7 @@ function queue(pic) {
 }
 function drawNet() {
   var n = readQ().length;
-  $('net').textContent = [n ? n + ' punch' + (n > 1 ? 'es' : '') + ' waiting to send' : '', K && !stream ? 'Camera off' : ''].filter(Boolean).join(' · ');
+  $('net').textContent = [n ? n + ' punch' + (n > 1 ? 'es' : '') + ' waiting to send' : '', K && !stream ? 'Camera off' + (camWhy ? ' (' + camWhy + ')' : '') + ' — tap to turn on' : ''].filter(Boolean).join(' · ');
 }
 var sending = false;
 function flush() {
