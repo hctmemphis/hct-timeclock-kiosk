@@ -169,9 +169,10 @@ $('cNoPic').onclick = function () { if (!busy && who) send(''); };
 function send(pic) {
   if (busy) return;
   busy = true; clearTimeout(resetT); $('cGo').textContent = 'Saving…';
-  var type = who.next;
-  api('punch', { pin: pin, type: type, photo: pic }).then(function (r) {
+  var type = who.next, p = pin;
+  api('punch', { pin: p, type: type, photo: '' }).then(function (r) {   // photo goes after, so nobody waits on Drive
     busy = false; finish((r.type === 'OUT' ? 'Clocked Out' : 'Clocked In') + ' ' + r.time, 'Thanks, ' + r.name.split(' ')[0] + '!');
+    if (pic && r.id) sendPhoto({ id: r.id, pin: p, photo: pic });
   }, function (err) {
     busy = false;
     if (err.offline || !navigator.onLine) { queue(pic); return; }
@@ -242,11 +243,25 @@ function drawNet() {
   var n = readQ().length;
   $('net').textContent = [n ? n + ' punch' + (n > 1 ? 'es' : '') + ' waiting to send' : '', K && !stream && camWhy !== 'not available here' ? 'Camera off' + (camWhy ? ' (' + camWhy + ')' : '') + ' — tap to turn on' : ''].filter(Boolean).join(' · ');
 }
+// photos for punches already saved; one that fails waits here and is sent again with the next flush
+var PKEY = 'hctClockPhotos';
+function readP() { try { return JSON.parse(localStorage.getItem(PKEY) || '[]'); } catch (e) { return []; } }
+function writeP(q) { try { localStorage.setItem(PKEY, JSON.stringify(q.slice(-20))); } catch (e) {} }
+function sendPhoto(x) {
+  return api('photo', x).then(function () {}, function (err) {
+    if (err.offline || err.message === 'timeout') { var q = readP().filter(function (y) { return y.id !== x.id; }); q.push(x); writeP(q); }
+  });
+}
 var sending = false;
 function flush() {
-  var q = readQ(); if (!q.length || !navigator.onLine || sending) return;
+  var q = readQ(), ph = readP(); if ((!q.length && !ph.length) || !navigator.onLine || sending) return;
   sending = true;
-  api('sync', { list: q }).then(function () { writeQ(readQ().slice(q.length)); }, function () {})
+  (q.length ? api('sync', { list: q }).then(function () { writeQ(readQ().slice(q.length)); }, function () {}) : Promise.resolve())
+    .then(function () {
+      if (!ph.length) return;
+      writeP(readP().filter(function (y) { return !ph.some(function (z) { return z.id === y.id; }); }));
+      return ph.reduce(function (pr, x) { return pr.then(function () { return sendPhoto(x); }); }, Promise.resolve());
+    })
     .then(function () { sending = false; drawNet(); });
 }
 if (K) { setInterval(flush, 60000); window.addEventListener('online', flush); setTimeout(flush, 3000); }
