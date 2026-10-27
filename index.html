@@ -33,6 +33,8 @@
   .big { display: block; width: 100%; border: 0; border-radius: 16px; padding: 24px; font-size: 30px; font-weight: 700; color: #fff; }
   .in { background: #2e7d32; } .out { background: #c62828; } .cancel { margin-top: 14px; background: #e6e9e2; color: #333; font-size: 20px; padding: 16px; }
   .done h1 { font-size: 40px; } .done .tick { font-size: 70px; }
+  .done { position: relative; } .done .hrs { font-size: 34px; font-weight: 700; margin: 6px 0 10px; color: #1b1f1a; }
+  .x { position: absolute; top: 10px; right: 14px; width: 56px; height: 56px; border: 0; border-radius: 28px; background: #e0e5dc; font-size: 30px; line-height: 56px; padding: 0; }
   /* no preview: the video has to stay "on screen" for iPads to keep feeding it frames, so it is 1px and see-through */
   #cam { position: fixed; left: 0; bottom: 0; width: 1px; height: 1px; opacity: 0.01; pointer-events: none; }
   .hide { display: none !important; }
@@ -52,7 +54,7 @@
   <h1 id="cName"></h1><p id="cInfo"></p>
   <button class="big" id="cGo"></button><button class="big cancel hide" id="cNoPic"></button><button class="big cancel" id="cNo">Cancel</button>
 </div></div>
-<div class="wrap hide" id="done"><div class="card done"><div class="tick">✓</div><h1 id="dTitle"></h1><p id="dInfo"></p></div></div>
+<div class="wrap hide" id="done"><div class="card done"><button type="button" class="x hide" id="dX" aria-label="Close">✕</button><div class="tick">✓</div><h1 id="dTitle"></h1><p class="hrs hide" id="dHrs"></p><p id="dInfo"></p></div></div>
 <video id="cam" autoplay playsinline muted></video>
 <canvas id="snap" width="320" height="240" class="hide"></canvas>
 <input type="file" id="pick" accept="image/*" capture="user" class="hide">
@@ -172,6 +174,11 @@ function send(pic) {
   var type = who.next, p = pin;
   api('punch', { pin: p, type: type, photo: '' }).then(function (r) {   // photo goes after, so nobody waits on Drive
     busy = false; finish((r.type === 'OUT' ? 'Clocked Out' : 'Clocked In') + ' ' + r.time, 'Thanks, ' + r.name.split(' ')[0] + '!');
+    if (r.worked != null) {   // clock-out: show the shift's hours until they tap ✕ (or 30 s)
+      $('dHrs').textContent = 'You worked ' + Math.floor(r.worked / 60) + ' h ' + (r.worked % 60) + ' min';
+      $('dInfo').textContent = 'Since ' + r.since + '. Thanks, ' + r.name.split(' ')[0] + '!';
+      $('dHrs').classList.remove('hide'); $('dX').classList.remove('hide'); later(30000);
+    }
     if (pic && r.id) sendPhoto({ id: r.id, pin: p, photo: pic });
   }, function (err) {
     busy = false;
@@ -222,9 +229,11 @@ function jpegTurn(buf) {   // EXIF orientation (1 = upright), 0 if unknown
   return 0;
 }
 $('cNo').onclick = reset;
+$('dX').onclick = reset;
 function finish(title, info, bad) {
   camTo();
   $('dTitle').textContent = title; $('dInfo').textContent = info;
+  $('dHrs').classList.add('hide'); $('dX').classList.add('hide');
   document.querySelector('.tick').textContent = bad ? '!' : '✓';
   document.querySelector('.tick').style.color = bad ? '#b00020' : '#2e7d32';
   show('done'); later(bad ? 6000 : 4000);
