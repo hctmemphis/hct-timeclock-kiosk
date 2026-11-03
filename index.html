@@ -74,9 +74,10 @@ if (!K) { $('home').classList.add('hide'); $('nokey').classList.remove('hide'); 
 function show(id) { ['home', 'confirm', 'done'].forEach(function (x) { $(x).classList.toggle('hide', x !== id); }); }
 
 // ---- talking to the timeclock script ----
-function api(action, body) {
+var SLOW_MS = 10000;   // PIN check / punch: no answer by then → the punch is kept on the iPad instead of making people wait
+function api(action, body, ms) {
   body.k = K; body.action = action;
-  var ctl = new AbortController(), t = setTimeout(function () { ctl.abort(); }, 30000);
+  var ctl = new AbortController(), t = setTimeout(function () { ctl.abort(); }, ms || 30000);
   return fetch(API, { method: 'POST', body: JSON.stringify(body), signal: ctl.signal })   // text/plain: no preflight
     .then(function (r) { return r.json(); }, function (e) { var x = new Error(e.name === 'AbortError' ? 'timeout' : 'network'); x.offline = e.name !== 'AbortError'; throw x; })
     .then(function (r) { clearTimeout(t); if (!r.ok) throw new Error(r.error); return r.data; },
@@ -140,7 +141,8 @@ document.addEventListener('touchend', fullScreen, true);
 function lookup() {
   if (pin.length < MAXLEN) return;
   busy = true; setMsg('Checking…'); startCam();
-  api('who', { pin: pin }).then(function (w) {
+  var at = Date.now();
+  api('who', { pin: pin }, SLOW_MS).then(function (w) {
     busy = false; who = w;
     $('cName').textContent = 'Hi ' + w.name.split(' ')[0];
     $('cInfo').textContent = w.next === 'OUT' ? 'You clocked in ' + w.since + '.' : 'You are clocked out.';
@@ -150,8 +152,8 @@ function lookup() {
     show('confirm'); later(20000);
   }, function (err) {
     busy = false;
-    if (err.offline || !navigator.onLine) { queue(photo()); return; }
-    pin = ''; drawDots(); setMsg(err.message === 'timeout' ? 'No answer from the server. Try again.' : clean(err) || 'Try again', true);
+    if (err.offline || err.message === 'timeout' || !navigator.onLine) { queue(photo(), { at: at }); return; }
+    pin = ''; drawDots(); setMsg(clean(err) || 'Try again', true);
   });
 }
 $('cGo').onclick = function () {
@@ -171,8 +173,9 @@ $('cNoPic').onclick = function () { if (!busy && who) send(''); };
 function send(pic) {
   if (busy) return;
   busy = true; clearTimeout(resetT); $('cGo').textContent = 'Saving…';
-  var type = who.next, p = pin;
-  api('punch', { pin: p, type: type, photo: '' }).then(function (r) {   // photo goes after, so nobody waits on Drive
+  // the id goes with the punch, so if the answer is lost and it's sent again from the iPad later, it isn't saved twice
+  var type = who.next, p = pin, at = Date.now(), id = newId();
+  api('punch', { pin: p, type: type, photo: '', id: id }, SLOW_MS).then(function (r) {   // photo goes after, so nobody waits on Drive
     busy = false; finish((r.type === 'OUT' ? 'Clocked Out' : 'Clocked In') + ' ' + r.time, 'Thanks, ' + r.name.split(' ')[0] + '!');
     if (r.worked != null) {   // clock-out: show the shift's hours until they tap ✕ (or 30 s)
       $('dHrs').textContent = 'You worked ' + Math.floor(r.worked / 60) + ' h ' + (r.worked % 60) + ' min';
@@ -182,8 +185,8 @@ function send(pic) {
     if (pic && r.id) sendPhoto({ id: r.id, pin: p, photo: pic });
   }, function (err) {
     busy = false;
-    if (err.offline || !navigator.onLine) { queue(pic); return; }
-    finish('Not saved', err.message === 'timeout' ? 'No answer from the server. Check the On the clock list before trying again.' : clean(err) || 'Please try again.', true);
+    if (err.offline || err.message === 'timeout' || !navigator.onLine) { queue(pic, { id: id, at: at, checked: true }); return; }
+    finish('Not saved', clean(err) || 'Please try again.', true);
   });
 }
 /** Camera photo → small 320×240 JPEG, upright (iOS 12 doesn't rotate photos drawn on a canvas, so we do). */
@@ -244,9 +247,13 @@ function reset() { clearTimeout(resetT); camTo(); pin = ''; who = null; busy = f
 // ---- offline: keep the punch on the iPad, send it when the connection is back ----
 function readQ() { try { return JSON.parse(localStorage.getItem(QKEY) || '[]'); } catch (e) { return []; } }
 function writeQ(q) { try { localStorage.setItem(QKEY, JSON.stringify(q)); } catch (e) {} }
-function queue(pic) {
-  var q = readQ(); q.push({ id: 'q' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8), pin: pin, at: Date.now(), photo: pic || '' }); writeQ(q); drawNet();
-  finish('Saved ' + new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }), 'No internet right now, so your PIN can\'t be checked. Your punch is saved on this iPad and will be sent automatically. If you think you mistyped your PIN, tell the office.');
+function newId() { return 'q' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8); }
+/** o: {id, at, checked} — checked = the PIN was already matched, so no "mistyped PIN" warning. */
+function queue(pic, o) {
+  o = o || {};
+  var at = o.at || Date.now(), q = readQ(); q.push({ id: o.id || newId(), pin: pin, at: at, photo: pic || '' }); writeQ(q); drawNet();
+  finish('Saved ' + new Date(at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }), 'The internet is down or slow, so your punch is saved on this iPad and will be sent automatically. You don\'t need to punch again.' +
+    (o.checked ? '' : ' If you think you mistyped your PIN, tell the office.'));
 }
 function drawNet() {
   var n = readQ().length;
