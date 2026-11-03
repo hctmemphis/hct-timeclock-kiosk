@@ -8,12 +8,11 @@
 <meta name="robots" content="noindex">
 <title>HCT Time Clock</title>
 <!--
-  HCT Time Clock — photo kiosk for the base iPad.
-  Lives outside Google (GitHub Pages) because Google's web-app frame blocks the camera; it talks to the
+  HCT Time Clock — kiosk for the base iPad.
+  Lives outside Google (GitHub Pages) and talks to the
   "HCT Timeclock" Apps Script (doPost in Code.gs). The access key comes from the link (?k=...) and is
   remembered on the iPad — it is never stored in this file. Source of truth: hct-crew-app/timeclock/kiosk-page.
-  Photos: a live camera snapshot where the browser allows it. Where it doesn't (the base iPad runs iOS 12, which gives
-  Home Screen web apps no camera), the punch is saved without a photo — crews are never asked to take one.
+  No photos (2026-11-03): the camera slowed punches on the base iPad's weak Wi-Fi, so it was taken out.
 -->
 <style>
   * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
@@ -35,8 +34,6 @@
   .done h1 { font-size: 40px; } .done .tick { font-size: 70px; }
   .done { position: relative; } .done .hrs { font-size: 34px; font-weight: 700; margin: 6px 0 10px; color: #1b1f1a; }
   .x { position: absolute; top: 10px; right: 14px; width: 56px; height: 56px; border: 0; border-radius: 28px; background: #e0e5dc; font-size: 30px; line-height: 56px; padding: 0; }
-  /* no preview: the video has to stay "on screen" for iPads to keep feeding it frames, so it is 1px and see-through */
-  #cam { position: fixed; left: 0; bottom: 0; width: 1px; height: 1px; opacity: 0.01; pointer-events: none; }
   .hide { display: none !important; }
   .setup { max-width: 520px; text-align: center; font-size: 18px; line-height: 1.5; }
 </style>
@@ -55,8 +52,6 @@
   <button class="big" id="cGo"></button><button class="big cancel" id="cNo">Cancel</button>
 </div></div>
 <div class="wrap hide" id="done"><div class="card done"><button type="button" class="x hide" id="dX" aria-label="Close">✕</button><div class="tick">✓</div><h1 id="dTitle"></h1><p class="hrs hide" id="dHrs"></p><p id="dInfo"></p></div></div>
-<video id="cam" autoplay playsinline muted></video>
-<canvas id="snap" width="320" height="240" class="hide"></canvas>
 <script>
 // The "Kiosk (base iPad)" web-app deployment of the HCT Timeclock script. Not secret: every call also needs the key.
 var API = 'https://script.google.com/macros/s/AKfycbyJj01ZmNGFfockPUTZylujRcD8dXKgxYinUtarqbOJ6SIM1h8NHTR63ijHg07jilge/exec';
@@ -104,28 +99,6 @@ function clean(err) { return String(err && err.message || err || '').replace(/^(
 function setMsg(t, err) { $('msg').textContent = t; $('msg').className = 'msg' + (err ? ' err' : ''); }
 drawDots();
 
-// ---- camera: kept running so the picture is instant; punches still work if it's off ----
-var cam = $('cam'), stream = null, camWhy = '';
-function startCam() {
-  if (stream && stream.active) return;
-  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) { camWhy = 'not available here'; drawNet(); return; }
-  navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user', width: { ideal: 640 }, height: { ideal: 480 } }, audio: false })
-    .then(function (s) { stream = s; camWhy = ''; cam.srcObject = s; s.getTracks().forEach(function (t) { t.onended = function () { stream = null; }; }); drawNet(); })
-    .catch(function (e) { stream = null; camWhy = { NotAllowedError: 'blocked', NotFoundError: 'no camera', NotReadableError: 'in use by another app' }[e && e.name] || (e && e.name) || 'error'; drawNet(); });
-}
-function photo() {
-  if (!stream || cam.readyState < 2 || !cam.videoWidth) return '';
-  try {
-    var c = $('snap'), w = cam.videoWidth, h = cam.videoHeight, s = Math.min(w / 320, h / 240);
-    c.getContext('2d').drawImage(cam, (w - 320 * s) / 2, (h - 240 * s) / 2, 320 * s, 240 * s, 0, 0, 320, 240);
-    return c.toDataURL('image/jpeg', 0.7);
-  } catch (e) { return ''; }
-}
-function camTo() { if (cam.paused) cam.play().catch(function () {}); }
-document.addEventListener('visibilitychange', function () { if (!document.hidden) startCam(); });
-$('net').addEventListener('click', function () { if (!stream) startCam(); });   // a tap lets the iPad ask for the camera again
-if (K) startCam();
-
 // In Safari (not the Home Screen icon), go full screen on a tap so the address bar is hidden — where the iPad allows it.
 function fullScreen() {
   if (navigator.standalone) return;
@@ -139,7 +112,7 @@ document.addEventListener('touchend', fullScreen, true);
 // ---- punching ----
 function lookup() {
   if (pin.length < MAXLEN) return;
-  busy = true; setMsg('Checking…'); startCam();
+  busy = true; setMsg('Checking…');
   var at = Date.now();
   api('who', { pin: pin }, SLOW_MS).then(function (w) {
     busy = false; who = w;
@@ -147,38 +120,35 @@ function lookup() {
     $('cInfo').textContent = w.next === 'OUT' ? 'You clocked in ' + w.since + '.' : 'You are clocked out.';
     $('cGo').textContent = w.next === 'OUT' ? 'Clock Out' : 'Clock In';
     $('cGo').className = 'big ' + (w.next === 'OUT' ? 'out' : 'in');
-    camTo();
     show('confirm'); later(20000);
   }, function (err) {
     busy = false;
-    if (err.offline || err.message === 'timeout' || !navigator.onLine) { queue(photo(), { at: at }); return; }
+    if (err.offline || err.message === 'timeout' || !navigator.onLine) { queue({ at: at }); return; }
     pin = ''; drawDots(); setMsg(clean(err) || 'Try again', true);
   });
 }
-$('cGo').onclick = function () { if (!busy && who) send(photo()); };   // photo() is '' when there's no live camera
-function send(pic) {
+$('cGo').onclick = function () { if (!busy && who) send(); };
+function send() {
   if (busy) return;
   busy = true; clearTimeout(resetT); $('cGo').textContent = 'Saving…';
   // the id goes with the punch, so if the answer is lost and it's sent again from the iPad later, it isn't saved twice
   var type = who.next, p = pin, at = Date.now(), id = newId();
-  api('punch', { pin: p, type: type, photo: '', id: id }, SLOW_MS).then(function (r) {   // photo goes after, so nobody waits on Drive
+  api('punch', { pin: p, type: type, photo: '', id: id }, SLOW_MS).then(function (r) {
     busy = false; finish((r.type === 'OUT' ? 'Clocked Out' : 'Clocked In') + ' ' + r.time, 'Thanks, ' + r.name.split(' ')[0] + '!');
     if (r.worked != null) {   // clock-out: show the shift's hours until they tap ✕ (or 30 s)
       $('dHrs').textContent = 'You worked ' + Math.floor(r.worked / 60) + ' h ' + (r.worked % 60) + ' min';
       $('dInfo').textContent = 'Since ' + r.since + '. Thanks, ' + r.name.split(' ')[0] + '!';
       $('dHrs').classList.remove('hide'); $('dX').classList.remove('hide'); later(30000);
     }
-    if (pic && r.id) sendPhoto({ id: r.id, pin: p, photo: pic });
   }, function (err) {
     busy = false;
-    if (err.offline || err.message === 'timeout' || !navigator.onLine) { queue(pic, { id: id, at: at, checked: true }); return; }
+    if (err.offline || err.message === 'timeout' || !navigator.onLine) { queue({ id: id, at: at, checked: true }); return; }
     finish('Not saved', clean(err) || 'Please try again.', true);
   });
 }
 $('cNo').onclick = reset;
 $('dX').onclick = reset;
 function finish(title, info, bad) {
-  camTo();
   $('dTitle').textContent = title; $('dInfo').textContent = info;
   $('dHrs').classList.add('hide'); $('dX').classList.add('hide');
   document.querySelector('.tick').textContent = bad ? '!' : '✓';
@@ -186,42 +156,28 @@ function finish(title, info, bad) {
   show('done'); later(bad ? 6000 : 4000);
 }
 function later(ms) { clearTimeout(resetT); resetT = setTimeout(reset, ms); }
-function reset() { clearTimeout(resetT); camTo(); pin = ''; who = null; busy = false; drawDots(); setMsg('Enter your PIN'); show('home'); }
+function reset() { clearTimeout(resetT); pin = ''; who = null; busy = false; drawDots(); setMsg('Enter your PIN'); show('home'); }
 
 // ---- offline: keep the punch on the iPad, send it when the connection is back ----
 function readQ() { try { return JSON.parse(localStorage.getItem(QKEY) || '[]'); } catch (e) { return []; } }
 function writeQ(q) { try { localStorage.setItem(QKEY, JSON.stringify(q)); } catch (e) {} }
 function newId() { return 'q' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8); }
 /** o: {id, at, checked} — checked = the PIN was already matched, so no "mistyped PIN" warning. */
-function queue(pic, o) {
+function queue(o) {
   o = o || {};
-  var at = o.at || Date.now(), q = readQ(); q.push({ id: o.id || newId(), pin: pin, at: at, photo: pic || '' }); writeQ(q); drawNet();
+  var at = o.at || Date.now(), q = readQ(); q.push({ id: o.id || newId(), pin: pin, at: at, photo: '' }); writeQ(q); drawNet();
   finish('Saved ' + new Date(at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }), 'The internet is down or slow, so your punch is saved on this iPad and will be sent automatically. You don\'t need to punch again.' +
     (o.checked ? '' : ' If you think you mistyped your PIN, tell the office.'));
 }
 function drawNet() {
   var n = readQ().length;
-  $('net').textContent = [n ? n + ' punch' + (n > 1 ? 'es' : '') + ' waiting to send' : '', K && !stream && camWhy !== 'not available here' ? 'Camera off' + (camWhy ? ' (' + camWhy + ')' : '') + ' — tap to turn on' : ''].filter(Boolean).join(' · ');
-}
-// photos for punches already saved; one that fails waits here and is sent again with the next flush
-var PKEY = 'hctClockPhotos';
-function readP() { try { return JSON.parse(localStorage.getItem(PKEY) || '[]'); } catch (e) { return []; } }
-function writeP(q) { try { localStorage.setItem(PKEY, JSON.stringify(q.slice(-20))); } catch (e) {} }
-function sendPhoto(x) {
-  return api('photo', x).then(function () {}, function (err) {
-    if (err.offline || err.message === 'timeout') { var q = readP().filter(function (y) { return y.id !== x.id; }); q.push(x); writeP(q); }
-  });
+  $('net').textContent = n ? n + ' punch' + (n > 1 ? 'es' : '') + ' waiting to send' : '';
 }
 var sending = false;
 function flush() {
-  var q = readQ(), ph = readP(); if ((!q.length && !ph.length) || !navigator.onLine || sending) return;
+  var q = readQ(); if (!q.length || !navigator.onLine || sending) return;
   sending = true;
-  (q.length ? api('sync', { list: q }).then(function () { writeQ(readQ().slice(q.length)); }, function () {}) : Promise.resolve())
-    .then(function () {
-      if (!ph.length) return;
-      writeP(readP().filter(function (y) { return !ph.some(function (z) { return z.id === y.id; }); }));
-      return ph.reduce(function (pr, x) { return pr.then(function () { return sendPhoto(x); }); }, Promise.resolve());
-    })
+  api('sync', { list: q }).then(function () { writeQ(readQ().slice(q.length)); }, function () {})
     .then(function () { sending = false; drawNet(); });
 }
 if (K) { setInterval(flush, 60000); window.addEventListener('online', flush); setTimeout(flush, 3000); }
