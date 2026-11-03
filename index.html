@@ -27,6 +27,7 @@
   .pad button { height: 82px; border: 0; border-radius: 18px; background: #fff; font-size: 34px; font-weight: 600; color: #1b1f1a; box-shadow: 0 2px 6px rgba(0,0,0,.1); }
   .pad button:active { background: #dfe6da; } .pad .ghost { background: transparent; box-shadow: none; font-size: 18px; color: #555; }
   .msg { min-height: 28px; font-size: 20px; text-align: center; } .err { color: #b00020; }
+  #ver { position: fixed; right: 10px; bottom: 6px; font-size: 13px; opacity: .6; }
   .card { background: #fff; border-radius: 22px; padding: 28px 34px; text-align: center; box-shadow: 0 4px 18px rgba(0,0,0,.12); min-width: 380px; max-width: 92vw; }
   .card h1 { margin: 0 0 6px; font-size: 34px; } .card p { margin: 0 0 18px; font-size: 18px; color: #4b5548; }
   .big { display: block; width: 100%; border: 0; border-radius: 16px; padding: 24px; font-size: 30px; font-weight: 700; color: #fff; }
@@ -40,6 +41,7 @@
 </head>
 <body>
 <header><b>HCT Time Clock</b><span id="net"></span></header>
+<div id="ver">Version 11/3 C</div>   <!-- change this on every update, so the office can see the iPad loaded it -->
 <div class="wrap hide" id="nokey"><div class="setup"><h2>This clock isn't set up</h2>Open the full kiosk link (it ends with <code>?k=…</code>) on this iPad once. Ask the office for it.</div></div>
 <div class="wrap" id="home">
   <div id="clock"></div><div id="date"></div>
