@@ -13,7 +13,7 @@
   "HCT Timeclock" Apps Script (doPost in Code.gs). The access key comes from the link (?k=...) and is
   remembered on the iPad — it is never stored in this file. Source of truth: hct-crew-app/timeclock/kiosk-page.
   Photos: a live camera snapshot where the browser allows it. Where it doesn't (the base iPad runs iOS 12, which gives
-  Home Screen web apps no camera), tapping Clock In/Out opens the iPad camera for a selfie instead.
+  Home Screen web apps no camera), the punch is saved without a photo — crews are never asked to take one.
 -->
 <style>
   * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
@@ -52,12 +52,11 @@
 </div>
 <div class="wrap hide" id="confirm"><div class="card">
   <h1 id="cName"></h1><p id="cInfo"></p>
-  <button class="big" id="cGo"></button><button class="big cancel hide" id="cNoPic"></button><button class="big cancel" id="cNo">Cancel</button>
+  <button class="big" id="cGo"></button><button class="big cancel" id="cNo">Cancel</button>
 </div></div>
 <div class="wrap hide" id="done"><div class="card done"><button type="button" class="x hide" id="dX" aria-label="Close">✕</button><div class="tick">✓</div><h1 id="dTitle"></h1><p class="hrs hide" id="dHrs"></p><p id="dInfo"></p></div></div>
 <video id="cam" autoplay playsinline muted></video>
 <canvas id="snap" width="320" height="240" class="hide"></canvas>
-<input type="file" id="pick" accept="image/*" capture="user" class="hide">
 <script>
 // The "Kiosk (base iPad)" web-app deployment of the HCT Timeclock script. Not secret: every call also needs the key.
 var API = 'https://script.google.com/macros/s/AKfycbyJj01ZmNGFfockPUTZylujRcD8dXKgxYinUtarqbOJ6SIM1h8NHTR63ijHg07jilge/exec';
@@ -148,7 +147,7 @@ function lookup() {
     $('cInfo').textContent = w.next === 'OUT' ? 'You clocked in ' + w.since + '.' : 'You are clocked out.';
     $('cGo').textContent = w.next === 'OUT' ? 'Clock Out' : 'Clock In';
     $('cGo').className = 'big ' + (w.next === 'OUT' ? 'out' : 'in');
-    $('cNoPic').classList.add('hide'); camTo();
+    camTo();
     show('confirm'); later(20000);
   }, function (err) {
     busy = false;
@@ -156,20 +155,7 @@ function lookup() {
     pin = ''; drawDots(); setMsg(clean(err) || 'Try again', true);
   });
 }
-$('cGo').onclick = function () {
-  if (busy || !who) return;
-  if (stream) { send(photo()); return; }
-  // no live camera: open the iPad camera for a selfie (must happen inside this tap)
-  later(90000); $('pick').value = ''; $('pick').click();
-  $('cNoPic').textContent = (who.next === 'OUT' ? 'Clock Out' : 'Clock In') + ' without photo';
-  $('cNoPic').classList.remove('hide'); $('cGo').textContent = 'Take photo again';
-};
-$('pick').onchange = function () {
-  var f = this.files && this.files[0]; if (!f || busy) return;
-  busy = true; $('cGo').textContent = 'Saving…';
-  shrink(f, function (pic) { busy = false; send(pic); });
-};
-$('cNoPic').onclick = function () { if (!busy && who) send(''); };
+$('cGo').onclick = function () { if (!busy && who) send(photo()); };   // photo() is '' when there's no live camera
 function send(pic) {
   if (busy) return;
   busy = true; clearTimeout(resetT); $('cGo').textContent = 'Saving…';
@@ -188,48 +174,6 @@ function send(pic) {
     if (err.offline || err.message === 'timeout' || !navigator.onLine) { queue(pic, { id: id, at: at, checked: true }); return; }
     finish('Not saved', clean(err) || 'Please try again.', true);
   });
-}
-/** Camera photo → small 320×240 JPEG, upright (iOS 12 doesn't rotate photos drawn on a canvas, so we do). */
-function shrink(file, done) {
-  var rd = new FileReader();
-  rd.onload = function () {
-    // newer browsers already draw photos upright; only old ones (iOS 12) need the EXIF turn applied by hand
-    var auto = window.CSS && CSS.supports && CSS.supports('image-orientation', 'from-image');
-    var turn = auto ? 1 : jpegTurn(rd.result), url = URL.createObjectURL(file), img = new Image();
-    img.onload = function () {
-      var side = turn >= 5, w = side ? img.height : img.width, h = side ? img.width : img.height;
-      var c = $('snap'), x = c.getContext('2d'), s = Math.min(w / 320, h / 240);
-      x.save(); x.clearRect(0, 0, 320, 240);
-      x.translate(160, 120); x.scale(1 / s, 1 / s);   // centre crop to 4:3
-      if (turn === 3) x.rotate(Math.PI); else if (turn === 6) x.rotate(Math.PI / 2); else if (turn === 8) x.rotate(-Math.PI / 2);
-      x.drawImage(img, -img.width / 2, -img.height / 2);
-      x.restore(); URL.revokeObjectURL(url);
-      try { done(c.toDataURL('image/jpeg', 0.7)); } catch (e) { done(''); }
-    };
-    img.onerror = function () { done(''); };
-    img.src = url;
-  };
-  rd.onerror = function () { done(''); };
-  rd.readAsArrayBuffer(file.slice(0, 65536));
-}
-function jpegTurn(buf) {   // EXIF orientation (1 = upright), 0 if unknown
-  try {
-    var v = new DataView(buf), o = 2;
-    if (v.getUint16(0) !== 0xFFD8) return 0;
-    while (o < v.byteLength - 4) {
-      var m = v.getUint16(o), len = v.getUint16(o + 2);
-      if (m === 0xFFE1 && v.getUint32(o + 4) === 0x45786966) {
-        var t = o + 10, le = v.getUint16(t) === 0x4949, n = v.getUint16(t + v.getUint32(t + 4, le), le);
-        for (var i = 0; i < n; i++) {
-          var e = t + v.getUint32(t + 4, le) + 2 + i * 12;
-          if (v.getUint16(e, le) === 0x0112) return v.getUint16(e + 8, le);
-        }
-        return 0;
-      }
-      o += 2 + len;
-    }
-  } catch (x) {}
-  return 0;
 }
 $('cNo').onclick = reset;
 $('dX').onclick = reset;
